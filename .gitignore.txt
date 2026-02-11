@@ -1,0 +1,6 @@
+__pycache__/
+.env
+venv/
+.DS_Store
+# Se o banco for muito grande, descomente a linha abaixo:
+# plataforma_educacional.db
