@@ -4,7 +4,6 @@ from typing import List, Optional
 import pandas as pd
 from models import Aluno, Localidade, QuestaoMapeamento, Gabarito
 from fastapi.responses import StreamingResponse
-from fpdf import FPDFException
 import io
 
 # --- CONFIGURAÇÃO DO BANCO ---
