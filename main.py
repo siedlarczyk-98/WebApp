@@ -184,19 +184,6 @@ def exportar_excel(co_curso: int, session: Session = Depends(get_session)):
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
-from fpdf import FPDF
-
-class PDF_Relatorio(FPDF):
-    def header(self):
-        self.set_font("Arial", "B", 12)
-        self.cell(0, 10, "Relatorio de Desempenho Institucional - P360", border=False, ln=True, align="C")
-        self.ln(5)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font("Arial", "I", 8)
-        self.cell(0, 10, f"Pagina {self.page_no()}", align="C")
-
 @app.get("/ies/{co_curso}/pdf")
 def gerar_pdf_relatorio(co_curso: int, session: Session = Depends(get_session)):
     # 1. Coleta os dados necessários (reutilizando os endpoints que já criamos)
