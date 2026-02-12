@@ -4,6 +4,9 @@ from typing import List, Optional
 import pandas as pd
 from models import Aluno, Localidade, QuestaoMapeamento, Gabarito
 from fastapi.responses import StreamingResponse
+from fpdf import FPDF
+import tempfile
+import os
 import io
 
 # --- CONFIGURAÇÃO DO BANCO ---
@@ -184,64 +187,143 @@ def exportar_excel(co_curso: int, session: Session = Depends(get_session)):
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
+from fpdf import FPDF
+import tempfile
+import os
+
+# --- DEFINIÇÕES DE ESTILO LEGADO ---
+NAVY = (30, 58, 95)
+ORANGE = (253, 94, 17)
+GREY = (240, 240, 240)
+
+def sanitizar_texto(txt):
+    if not isinstance(txt, str): return str(txt)
+    mapa = {'\u201c': '"', '\u201d': '"', '\u2018': "'", '\u2019': "'", '\u2013': '-', '–': '-'}
+    for o, d in mapa.items(): txt = txt.replace(o, d)
+    return txt.encode('latin-1', 'replace').decode('latin-1')
+
+class RelatorioP360(FPDF):
+    def header(self):
+        # MANTIDO CONFORME SOLICITADO
+        self.set_fill_color(30, 58, 95)
+        self.rect(0, 0, 210, 45, 'F')
+        if os.path.exists("logo_branca.png"):
+            self.image("logo_branca.png", x=165, y=10, w=30)
+        self.set_xy(15, 12)
+        self.set_font('Helvetica', 'B', 18)
+        self.set_text_color(255, 255, 255)
+        self.cell(0, 8, sanitizar_texto("Diagnóstico Microdados ENAMED 2025"), ln=True)
+        if hasattr(self, 'ies_info'):
+            self.set_font('Helvetica', 'B', 11)
+            self.set_text_color(253, 94, 17)
+            self.cell(0, 7, sanitizar_texto(f"IES: {self.ies_info['nome']}"), ln=True)
+            self.set_font('Helvetica', '', 10)
+            self.set_text_color(220, 220, 220)
+            texto_sub = f"{self.ies_info['municipio']} - {self.ies_info['uf']} | Conceito ENAMED: {self.ies_info['conceito']}"
+            self.cell(0, 6, sanitizar_texto(texto_sub), ln=True)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Helvetica', 'I', 8)
+        self.set_text_color(150, 150, 150)
+        self.cell(0, 10, f"P360 Analytics - Pagina {self.page_no()}", 0, 0, 'C')
+
 @app.get("/ies/{co_curso}/pdf")
-def gerar_pdf_relatorio(co_curso: int, session: Session = Depends(get_session)):
-    # 1. Coleta os dados necessários (reutilizando os endpoints que já criamos)
+def gerar_pdf_visual(co_curso: int, session: Session = Depends(get_session)):
     dash = dashboard_completo(co_curso, session)
     bench = obter_benchmark(co_curso, session)
+    loc = session.exec(select(Localidade).where(Localidade.co_curso == co_curso)).first()
+    conceito = session.exec(select(Aluno.enamed_ies).where(Aluno.co_curso == co_curso)).first()
     
-    # 2. Configuração do PDF
-    pdf = PDF_Relatorio()
+    pdf = RelatorioP360()
+    pdf.ies_info = {
+        'nome': dash['ies'],
+        'uf': loc.sigla_estado if loc else "-",
+        'municipio': loc.ies_munic if loc else "-",
+        'conceito': conceito if conceito else "N/A"
+    }
+    
+    pdf.set_margins(15, 15, 15)
     pdf.add_page()
-    pdf.set_font("Arial", size=10)
+    
+    # --- SEÇÃO 1: PERFORMANCE COMPARATIVA (Lógica Limpa) ---
+    pdf.set_y(55) # Margem de segurança pós-cabeçalho
+    pdf.set_font('Helvetica', 'B', 14)
+    pdf.set_text_color(30, 58, 95)
+    pdf.cell(0, 10, "1. Performance Comparativa", ln=True)    
+    
+    y_topo_cards = pdf.get_y() + 2
+    w_card = 58
+    h_card = 28
+    gap = 3
 
-    # --- CABEÇALHO E RESUMO ---
-    pdf.set_font("Arial", "B", 14)
-    pdf.cell(0, 10, f"Instituicao: {dash['ies']}", ln=True)
-    pdf.set_font("Arial", "", 12)
-    pdf.cell(0, 10, f"Aproveitamento Geral: {dash['media_geral']}%", ln=True)
-    pdf.cell(0, 10, f"Total de Alunos Avaliados: {dash['alunos']}", ln=True)
-    pdf.ln(10)
+    # --- CARD 1: SUA MÉDIA ---
+    pdf.set_fill_color(245, 245, 245)
+    pdf.rect(15, y_topo_cards, w_card, h_card, 'F')
+    pdf.set_xy(15, y_topo_cards + 5)
+    pdf.set_font('Helvetica', '', 8); pdf.set_text_color(100)
+    pdf.cell(w_card, 5, sanitizar_texto("Sua Média Geral"), align="C", ln=True)
+    pdf.set_x(15) 
+    pdf.set_font('Helvetica', 'B', 18); pdf.set_text_color(30, 58, 95)
+    pdf.cell(w_card, 12, f"{bench['performance']['ies_atual']}%", align="C", ln=True)
 
-    # --- TABELA DE BENCHMARK ---
-    pdf.set_fill_color(200, 220, 255)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 10, "Comparativo de Mercado (Benchmark)", ln=True, fill=True)
-    pdf.set_font("Arial", "", 11)
-    
-    pdf.cell(90, 10, "Grupo de Comparacao", border=1)
-    pdf.cell(90, 10, "Media de Acerto", border=1, ln=True)
-    
-    pdf.cell(90, 10, "Sua Instituicao", border=1)
-    pdf.cell(90, 10, f"{bench['performance']['ies_atual']}%", border=1, ln=True)
-    
-    pdf.cell(90, 10, "Media Nacional", border=1)
-    pdf.cell(90, 10, f"{bench['performance']['media_nacional']}%", border=1, ln=True)
-    
-    pdf.cell(90, 10, "Elite (ENAMED 5)", border=1)
-    pdf.cell(90, 10, f"{bench['performance']['media_elite_enamed_5']}%", border=1, ln=True)
-    pdf.ln(10)
+    # --- CARD 2: MÉDIA NACIONAL ---
+    x_card2 = 15 + w_card + gap
+    pdf.set_fill_color(245, 245, 245)
+    pdf.rect(x_card2, y_topo_cards, w_card, h_card, 'F')
+    pdf.set_xy(x_card2, y_topo_cards + 5)
+    pdf.set_font('Helvetica', '', 8); pdf.set_text_color(100)
+    pdf.cell(w_card, 5, sanitizar_texto("Média Nacional"), align="C", ln=True)
+    pdf.set_x(x_card2)
+    pdf.set_font('Helvetica', 'B', 18); pdf.set_text_color(30, 58, 95)
+    pdf.cell(w_card, 12, f"{bench['performance']['media_nacional']}%", align="C", ln=True)
 
-    pdf.set_fill_color(255, 200, 200)
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 10, "Principais Gaps Pedagogicos (Prioridade de Intervencao)", ln=True, fill=True)
-    pdf.set_font("Arial", "", 10)
-    
-    for item in dash['analise']['atencao']:
-        area = item['grande_area']
-        sub = item['subespecialidade']
-        gap = round(item['gap'], 2)
-        pdf.cell(0, 8, f"* {area} ({sub}): Gap de {gap}%", ln=True)
+    # --- CARD 3: ELITE ---
+    x_card3 = 15 + 2*(w_card + gap)
+    pdf.set_fill_color(253, 94, 17)
+    pdf.rect(x_card3, y_topo_cards, w_card, h_card, 'F')
+    pdf.set_xy(x_card3, y_topo_cards + 5)
+    pdf.set_font('Helvetica', 'B', 8); pdf.set_text_color(255)
+    pdf.cell(w_card, 5, sanitizar_texto("Referências Conceito 5"), align="C", ln=True)
+    pdf.set_x(x_card3)
+    pdf.set_font('Helvetica', 'B', 18)
+    pdf.cell(w_card, 12, f"{bench['performance']['media_elite_enamed_5']}%", align="C", ln=True)
 
-    pdf_output = pdf.output(dest='S') # Gera string binária
+    # --- TEXTO DE APOIO ---
+    pdf.set_xy(15, y_topo_cards + h_card + 3)
+    pdf.set_font('Helvetica', 'I', 8); pdf.set_text_color(120)
+    gap_elite = bench['gaps']['vs_elite']
+    texto_apoio = f"Comparativo da média de acertos vs Média Nacional e Cursos de Excelência (Conceito 5 ENAMED). Gap: {gap_elite:+.1f} pp em relação à elite."
+    pdf.cell(0, 8, sanitizar_texto(texto_apoio), ln=True)
+
+    # --- SEÇÃO 2: TABELA DE GAPS ---
+    pdf.ln(5) # Espaço entre seção 1 e seção 2
+    pdf.set_font('Helvetica', 'B', 14)
+    pdf.set_text_color(30, 58, 95)
+    pdf.cell(0, 10, "2. Gaps de Atenção (Prioridades de Intervenção)", ln=True)
     
-    filename = f"Relatorio_P360_IES_{co_curso}.pdf"
+    pdf.set_fill_color(30, 58, 95); pdf.set_text_color(255)
+    pdf.set_font('Helvetica', 'B', 9)
+    pdf.cell(55, 8, " Grande Área", 0, 0, 'L', 1)
+    pdf.cell(85, 8, " Subespecialidade", 0, 0, 'L', 1)
+    pdf.cell(40, 8, " Gap (pp)", 0, 1, 'C', 1)
+    
+    pdf.set_font('Helvetica', '', 8); pdf.set_text_color(60)
+    for i, item in enumerate(dash['analise']['atencao']):
+        fill = (i % 2 == 0)
+        pdf.set_fill_color(250, 250, 250) if fill else pdf.set_fill_color(255, 255, 255)
+        pdf.cell(55, 7, sanitizar_texto(f" {item['grande_area']}"), 'B', 0, 'L', fill)
+        pdf.cell(85, 7, sanitizar_texto(f" {item['subespecialidade']}"), 'B', 0, 'L', fill)
+        pdf.set_text_color(200, 0, 0)
+        pdf.cell(40, 7, f"{item['gap']:+.1f}", 'B', 1, 'C', fill)
+        pdf.set_text_color(60)
+
+    pdf_out = pdf.output(dest='S')
     return StreamingResponse(
-        io.BytesIO(pdf_output),
+        io.BytesIO(pdf_out), 
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f"attachment; filename=Relatorio_P360.pdf"}
     )
-
 # ==========================================
 # 3. ROTAS DE FILTROS
 # ==========================================
