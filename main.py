@@ -96,14 +96,21 @@ def calcular_metricas_curso(co_curso: int, session: Session):
     df_alunos = pd.DataFrame(dados_alunos, columns=['aluno_registro_id', 'co_caderno'] + colunas_q)
 
     df_corr = df_alunos.copy()
+    for col in colunas_q:
+        df_corr[col] = 0  # Inicializa tudo como 0 (inteiro)
+
     for caderno in df_alunos['co_caderno'].unique():
         gab = GABARITO_CACHE.get(caderno)
         if not gab: continue
         mask = df_alunos['co_caderno'] == caderno
+        
         for i, col in enumerate(colunas_q):
             if i >= len(gab): break
-            if gab[i] in ['X', 'Z', '*']: df_corr.loc[mask, col] = 1
-            else: df_corr.loc[mask, col] = (df_alunos.loc[mask, col] == gab[i]).astype(int)
+            if gab[i] in ['X', 'Z', '*']: 
+                df_corr.loc[mask, col] = 1
+            else: 
+                # Comparamos o df_alunos (que tem as letras) mas salvamos no df_corr (que agora é int)
+                df_corr.loc[mask, col] = (df_alunos.loc[mask, col] == gab[i]).astype(int)
 
     df_long = df_corr.melt(id_vars=['aluno_registro_id', 'co_caderno'], value_vars=colunas_q, var_name='nu_questao', value_name='acerto')
     df_long['nu_questao'] = pd.to_numeric(df_long['nu_questao']).astype(int)
