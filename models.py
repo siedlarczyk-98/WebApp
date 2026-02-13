@@ -25,7 +25,6 @@ class Localidade(SQLModel, table=True):
     ies_munic: str
     sigla_estado: str
 
-# --- NOVO: A CLASSE QUE FALTAVA ---
 class Gabarito(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     co_caderno: int
