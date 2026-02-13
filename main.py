@@ -6,17 +6,29 @@ from models import Aluno, Localidade, QuestaoMapeamento, Gabarito
 from fastapi.responses import StreamingResponse
 from fpdf import FPDF
 import io
+from fastapi.middleware.cors import CORSMiddleware
+from functools import lru_cache
 
 # --- CONFIGURAÇÃO DO BANCO ---
 sqlite_url = "sqlite:///plataforma_educacional.db"
 engine = create_engine(sqlite_url)
 app = FastAPI(title="P360 Analytics API")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- VARIÁVEIS GLOBAIS E CACHE ---
+REFERENCIAL_CACHE = None
+
 def get_session():
     with Session(engine) as session:
         yield session
 
-# --- CACHE (CARREGA GABARITOS E MAPAS NA MEMÓRIA) ---
 def carregar_contexto():
     try:
         with Session(engine) as session:
@@ -34,53 +46,41 @@ def carregar_contexto():
 
 GABARITO_CACHE, DF_MAPA_CACHE = carregar_contexto()
 
-# --- FUNÇÕES DE SUPORTE E RANKING ---
+# --- FUNÇÕES DE SUPORTE (OTIMIZADAS PARA MEMÓRIA) ---
 
 def obter_referencial_nacional(session: Session):
-    """Calcula a média Brasil por diagnóstico para base de Gap Real"""
-    todos_alunos = session.exec(select(Aluno)).all()
+    """
+    OTIMIZAÇÃO: Busca apenas as colunas necessárias (co_caderno, respostas)
+    em vez de carregar o objeto Aluno inteiro. Economiza muita RAM.
+    """
+    statement = select(Aluno.co_caderno, Aluno.respostas)
+    todos_alunos = session.exec(statement).all()
+    
     lista_acertos = []
-    for al in todos_alunos:
-        gab = GABARITO_CACHE.get(al.co_caderno)
+    # O loop agora desempacota a tupla (caderno, respostas)
+    for al_co_caderno, al_respostas in todos_alunos:
+        gab = GABARITO_CACHE.get(al_co_caderno)
         if not gab: continue
-        res = list(al.respostas)
+        res = list(al_respostas)
         for i in range(min(len(res), 100)):
+            if i >= len(gab): break
             resp_al = str(res[i]).strip().upper()
             resp_gab = str(gab[i]).strip().upper()
             acerto = 1 if resp_gab in ['X', 'Z', '*'] else (1 if resp_al == resp_gab else 0)
-            lista_acertos.append({"nu_questao": i + 1, "co_caderno": al.co_caderno, "acerto": acerto})
+            lista_acertos.append({"nu_questao": i + 1, "co_caderno": al_co_caderno, "acerto": acerto})
     
+    if not lista_acertos: return pd.DataFrame()
     df_nacional = pd.DataFrame(lista_acertos)
     df_nacional = pd.merge(df_nacional, DF_MAPA_CACHE, on=['nu_questao', 'co_caderno'])
     return df_nacional.groupby(['grande_area', 'subespecialidade', 'diagnostico'])['acerto'].mean().reset_index()
 
-def obter_ranking_ies(session: Session, co_curso: int, uf: Optional[str] = None):
-    """Gera o ranking para o posicionamento competitivo no PDF"""
-    statement = select(Aluno.co_curso, Aluno.ies_nome, Aluno.respostas, Aluno.co_caderno)
-    if uf:
-        sub = select(Localidade.co_curso).where(Localidade.sigla_estado == uf)
-        statement = statement.where(Aluno.co_curso.in_(sub))
-    
-    todos = session.exec(statement).all()
-    resultados = {}
-    for r in todos:
-        if r.co_curso not in resultados: 
-            resultados[r.co_curso] = {"nome": r.ies_nome, "acertos": 0, "total": 0, "co_curso": r.co_curso}
-        gab = GABARITO_CACHE.get(r.co_caderno)
-        if not gab: continue
-        res = list(r.respostas)
-        for i in range(min(len(res), 100)):
-            resultados[r.co_curso]["total"] += 1
-            if gab[i] in ['X','Z','*'] or res[i] == gab[i]: resultados[r.co_curso]["acertos"] += 1
-    
-    ranking = []
-    for cid, dados in resultados.items():
-        media = (dados["acertos"] / dados["total"] * 100) if dados["total"] > 0 else 0
-        ranking.append({"co_curso": cid, "nome": dados["nome"], "media": round(media, 1)})
-    
-    ranking = sorted(ranking, key=lambda x: x['media'], reverse=True)
-    posicao = next((i for i, item in enumerate(ranking) if item["co_curso"] == co_curso), 0) + 1
-    return ranking, posicao, len(ranking)
+def carregar_referencial_nacional(session):
+    global REFERENCIAL_CACHE
+    if REFERENCIAL_CACHE is None:
+        print("🚀 Gerando cache do Referencial Nacional...")
+        df = obter_referencial_nacional(session)
+        REFERENCIAL_CACHE = df.rename(columns={'acerto': 'media_nacional'})
+    return REFERENCIAL_CACHE
 
 def calcular_metricas_curso(co_curso: int, session: Session):
     alunos = session.exec(select(Aluno).where(Aluno.co_curso == co_curso)).all()
@@ -94,29 +94,52 @@ def calcular_metricas_curso(co_curso: int, session: Session):
     
     colunas_q = [n for n in range(1, 101)]
     df_alunos = pd.DataFrame(dados_alunos, columns=['aluno_registro_id', 'co_caderno'] + colunas_q)
-
     df_corr = df_alunos.copy()
-    for col in colunas_q:
-        df_corr[col] = 0  # Inicializa tudo como 0 (inteiro)
+    for col in colunas_q: df_corr[col] = 0
 
     for caderno in df_alunos['co_caderno'].unique():
         gab = GABARITO_CACHE.get(caderno)
         if not gab: continue
         mask = df_alunos['co_caderno'] == caderno
-        
         for i, col in enumerate(colunas_q):
             if i >= len(gab): break
-            if gab[i] in ['X', 'Z', '*']: 
-                df_corr.loc[mask, col] = 1
-            else: 
-                # Comparamos o df_alunos (que tem as letras) mas salvamos no df_corr (que agora é int)
-                df_corr.loc[mask, col] = (df_alunos.loc[mask, col] == gab[i]).astype(int)
+            if gab[i] in ['X', 'Z', '*']: df_corr.loc[mask, col] = 1
+            else: df_corr.loc[mask, col] = (df_alunos.loc[mask, col] == gab[i]).astype(int)
 
     df_long = df_corr.melt(id_vars=['aluno_registro_id', 'co_caderno'], value_vars=colunas_q, var_name='nu_questao', value_name='acerto')
     df_long['nu_questao'] = pd.to_numeric(df_long['nu_questao']).astype(int)
-    df_long['co_caderno'] = pd.to_numeric(df_long['co_caderno']).astype(int)
-    
     return pd.merge(df_long, DF_MAPA_CACHE, on=['nu_questao', 'co_caderno'], how='inner')
+
+def obter_ranking_ies(session: Session, co_curso: int, uf: Optional[str] = None):
+    # Otimização também aplicada aqui: Select específico
+    statement = select(Aluno.co_curso, Aluno.ies_nome, Aluno.respostas, Aluno.co_caderno)
+    if uf:
+        sub = select(Localidade.co_curso).where(Localidade.sigla_estado == uf)
+        statement = statement.where(Aluno.co_curso.in_(sub))
+    
+    todos = session.exec(statement).all()
+    resultados = {}
+    
+    # Desempacotamento da tupla retornada pelo select específico
+    for r_co_curso, r_ies_nome, r_respostas, r_co_caderno in todos:
+        if r_co_curso not in resultados: 
+            resultados[r_co_curso] = {"nome": r_ies_nome, "acertos": 0, "total": 0, "co_curso": r_co_curso}
+        gab = GABARITO_CACHE.get(r_co_caderno)
+        if not gab: continue
+        res = list(r_respostas)
+        for i in range(min(len(res), 100)):
+            resultados[r_co_curso]["total"] += 1
+            if i < len(gab) and (gab[i] in ['X','Z','*'] or res[i] == gab[i]): 
+                resultados[r_co_curso]["acertos"] += 1
+    
+    ranking = []
+    for cid, dados in resultados.items():
+        media = (dados["acertos"] / dados["total"] * 100) if dados["total"] > 0 else 0
+        ranking.append({"co_curso": cid, "nome": dados["nome"], "media": round(media, 1)})
+    
+    ranking = sorted(ranking, key=lambda x: x['media'], reverse=True)
+    posicao = next((i for i, item in enumerate(ranking) if item["co_curso"] == co_curso), 0) + 1
+    return ranking, posicao, len(ranking)
 
 # ==========================================
 # 1. ENDPOINTS DE DADOS
@@ -125,34 +148,6 @@ def calcular_metricas_curso(co_curso: int, session: Session):
 @app.get("/")
 def home():
     return {"status": "API P360 Online 🚀"}
-
-@app.get("/ies/{co_curso}/dashboard")
-def dashboard_completo(co_curso: int, session: Session = Depends(get_session)):
-    df_ies = calcular_metricas_curso(co_curso, session)
-    if df_ies is None or df_ies.empty: raise HTTPException(404, detail="IES sem dados")
-    
-    # Média Nacional de Referência
-    df_referencial = obter_referencial_nacional(session).rename(columns={'acerto': 'media_nacional'})
-    
-    # Média IES por tema
-    agrupado_ies = df_ies.groupby(['grande_area', 'subespecialidade', 'diagnostico'])['acerto'].mean().reset_index()
-    
-    # Merge para cálculo de Gap Real (IES - Nacional)
-    df_comparativo = pd.merge(agrupado_ies, df_referencial, on=['grande_area', 'subespecialidade', 'diagnostico'])
-    df_comparativo['gap'] = (df_comparativo['acerto'] - df_comparativo['media_nacional']) * 100
-    
-    fortalezas = df_comparativo.sort_values('gap', ascending=False).to_dict(orient='records')
-    atencao = df_comparativo.sort_values('gap', ascending=True).to_dict(orient='records')
-    
-    media_geral_ies = df_ies['acerto'].mean()
-    ies_nome = session.exec(select(Aluno.ies_nome).where(Aluno.co_curso == co_curso)).first()
-
-    return {
-        "ies": ies_nome,
-        "media_geral": round(float(media_geral_ies * 100), 2),
-        "alunos": int(df_ies['aluno_registro_id'].nunique()),
-        "analise": {"fortalezas": fortalezas, "atencao": atencao}
-    }
 
 @app.get("/ies/{co_curso}/matriz")
 def matriz_priorizacao(co_curso: int, session: Session = Depends(get_session)):
@@ -167,23 +162,30 @@ def matriz_priorizacao(co_curso: int, session: Session = Depends(get_session)):
 
 @app.get("/ies/{co_curso}/benchmark")
 def obter_benchmark(co_curso: int, session: Session = Depends(get_session)):
-    todos_alunos = session.exec(select(Aluno)).all()
-    if not todos_alunos: raise HTTPException(404, detail="Banco vazio")
+    # OTIMIZAÇÃO: Select apenas das colunas necessárias
+    statement = select(Aluno.co_curso, Aluno.co_caderno, Aluno.respostas, Aluno.enamed_ies)
+    todos_alunos = session.exec(statement).all()
+    
+    if not todos_alunos: 
+        raise HTTPException(404, detail="Banco vazio")
 
-    def calcular_media_lista(lista):
+    def calcular_media_lista(lista_filtrada):
         acertos, total = 0, 0
-        for al in lista:
-            gab = GABARITO_CACHE.get(al.co_caderno)
+        # Loop ajustado para tuplas
+        for al_co_curso, al_co_caderno, al_respostas, _ in lista_filtrada:
+            gab = GABARITO_CACHE.get(al_co_caderno)
             if not gab: continue
-            res = list(al.respostas)
+            res = list(al_respostas)
             for i in range(min(len(res), 100)):
                 total += 1
-                if gab[i] in ['X','Z','*'] or res[i] == gab[i]: acertos += 1
+                if i < len(gab) and (gab[i] in ['X','Z','*'] or res[i] == gab[i]): 
+                    acertos += 1
         return (acertos / total * 100) if total > 0 else 0
 
-    media_ies = calcular_media_lista([a for a in todos_alunos if a.co_curso == co_curso])
+    # Filtros ajustados para índices da tupla (0=co_curso, 3=enamed_ies)
+    media_ies = calcular_media_lista([a for a in todos_alunos if a[0] == co_curso])
     media_nac = calcular_media_lista(todos_alunos)
-    media_elite = calcular_media_lista([a for a in todos_alunos if str(a.enamed_ies).strip() == '5'])
+    media_elite = calcular_media_lista([a for a in todos_alunos if str(a[3]).strip() == '5'])
 
     return {
         "performance": {
@@ -213,8 +215,38 @@ def exportar_excel(co_curso: int, session: Session = Depends(get_session)):
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             headers={"Content-Disposition": f"attachment; filename=Relatorio_IES_{co_curso}.xlsx"})
 
+# --- DASHBOARD DEFINIDO AQUI (ANTES DO PDF) ---
+@app.get("/ies/{co_curso}/dashboard")
+def dashboard_completo(co_curso: int, session: Session = Depends(get_session)):
+    df_referencial = carregar_referencial_nacional(session)
+    df_ies = calcular_metricas_curso(co_curso, session)
+    
+    if df_ies is None or df_ies.empty: 
+        raise HTTPException(404, detail="IES sem dados")
+    
+    ies_nome = session.exec(select(Aluno.ies_nome).where(Aluno.co_curso == co_curso)).first() or "IES"
+
+    agrupado_ies = df_ies.groupby(['grande_area', 'subespecialidade', 'diagnostico'])['acerto'].mean().reset_index()
+    df_comparativo = pd.merge(agrupado_ies, df_referencial, on=['grande_area', 'subespecialidade', 'diagnostico'])
+    df_comparativo['gap'] = (df_comparativo['acerto'] - df_comparativo['media_nacional']) * 100
+    
+    # Arredondamentos para o JSON ficar limpo
+    df_comparativo['gap'] = df_comparativo['gap'].round(2)
+    df_comparativo['acerto'] = (df_comparativo['acerto'] * 100).round(2)
+    df_comparativo['media_nacional'] = (df_comparativo['media_nacional'] * 100).round(2)
+
+    fortalezas = df_comparativo.sort_values('gap', ascending=False).head(10).to_dict(orient='records')
+    atencao = df_comparativo.sort_values('gap', ascending=True).head(10).to_dict(orient='records')
+    
+    return {
+        "ies": ies_nome,
+        "media_geral": round(float(df_ies['acerto'].mean() * 100), 2),
+        "alunos": int(df_ies['aluno_registro_id'].nunique()),
+        "analise": {"fortalezas": fortalezas, "atencao": atencao}
+    }
+
 # ==========================================
-# 2. RELATÓRIO PDF (P360 ANALYTICS - VERSÃO TEASER)
+# 2. RELATÓRIO PDF (INTACTO)
 # ==========================================
 
 def sanitizar_texto(txt):
