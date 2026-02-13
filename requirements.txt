@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+sqlmodel
+fpdf2
+pandas
