@@ -209,7 +209,7 @@ def exportar_excel(co_curso: int, session: Session = Depends(get_session)):
                             headers={"Content-Disposition": f"attachment; filename=Relatorio_IES_{co_curso}.xlsx"})
 
 # ==========================================
-# 2. RELATÓRIO PDF (P360 ANALYTICS)
+# 2. RELATÓRIO PDF (P360 ANALYTICS - VERSÃO TEASER)
 # ==========================================
 
 def sanitizar_texto(txt):
@@ -220,8 +220,15 @@ def sanitizar_texto(txt):
 
 class RelatorioP360(FPDF):
     def header(self):
+        # 1. Fundo azul do cabeçalho
         self.set_fill_color(30, 58, 95)
         self.rect(0, 0, 210, 45, 'F')
+        
+        try:
+            self.image('logo_branca.png', x=165, y=10, w=30)
+        except:
+            pass # Se não achar a imagem, o código não trava
+            
         self.set_xy(15, 12)
         self.set_font('Helvetica', 'B', 18)
         self.set_text_color(255, 255, 255)
@@ -289,7 +296,7 @@ def gerar_pdf_visual(co_curso: int, session: Session = Depends(get_session)):
     pdf.set_font('Helvetica', 'I', 8); pdf.set_text_color(120)
     pdf.cell(0, 8, sanitizar_texto(f"Gap: {bench['gaps']['vs_elite']:+.1f} pp em relação à elite."), ln=True)
 
-    # --- SEÇÃO 2: RANKING ---
+    # --- SEÇÃO 2: POSICIONAMENTO ---
     pdf.ln(5); pdf.set_font('Helvetica', 'B', 14); pdf.set_text_color(30, 58, 95)
     pdf.cell(0, 10, "2. Posicionamento Competitivo", ln=True)
 
@@ -314,50 +321,94 @@ def gerar_pdf_visual(co_curso: int, session: Session = Depends(get_session)):
     draw_rank("2.1. Cenário Nacional", ranking_nac, pos_nac, total_nac)
     draw_rank(f"2.2. Cenário Regional ({uf_atual})", ranking_reg, pos_reg, total_reg)
 
-    # --- PÁGINA 2: TABELAS DE GAPS ---
-    pdf.add_page(); pdf.set_y(55)
-    pdf.set_font('Helvetica', 'B', 14); pdf.set_text_color(30, 58, 95)
-    pdf.cell(0, 10, sanitizar_texto("3. Pontos Críticos (Gap vs Nacional)"), ln=True); pdf.ln(2)
+    pdf.add_page()
+    pdf.set_y(55)
 
-    col_area, col_sub, col_diag, col_med, col_gap = 35, 40, 65, 20, 20
-    h_linha, w_box, h_box = 8, 15, 5
+    # 1. CONFIGURAÇÃO DE LAYOUT UNIFORME
+    col_area, col_sub, col_diag, col_med, col_gap = 32, 38, 70, 20, 20
+    h_linha, w_box, h_box = 8, 16, 5
 
-    def print_tabela(titulo, lista, cor_default=None):
+    def print_tabela(titulo, lista, modo_teaser=False):
         pdf.set_fill_color(30, 58, 95); pdf.set_text_color(255, 255, 255); pdf.set_font('Helvetica', 'B', 8)
-        pdf.cell(col_area, h_linha, " Area", 0, 0, 'L', True)
-        pdf.cell(col_sub, h_linha, " Sub", 0, 0, 'L', True)
-        pdf.cell(col_diag, h_linha, " Diagnostico", 0, 0, 'L', True)
-        pdf.cell(col_med, h_linha, " Media", 0, 0, 'C', True)
+        pdf.cell(col_area, h_linha, " Grande Área", 0, 0, 'L', True)
+        pdf.cell(col_sub, h_linha, " Subespecialidade", 0, 0, 'L', True)
+        pdf.cell(col_diag, h_linha, " Diagnóstico", 0, 0, 'L', True)
+        pdf.cell(col_med, h_linha, " Média", 0, 0, 'C', True)
         pdf.cell(col_gap, h_linha, " Gap", 0, 1, 'C', True)
 
         pdf.set_font('Helvetica', '', 7); pdf.set_text_color(60, 60, 60)
-        for i, item in enumerate(lista[:5]): 
-            fill = (i % 2 == 0); y_at, x_at = pdf.get_y(), pdf.get_x()
-            pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
-            pdf.cell(col_area, h_linha, sanitizar_texto(f" {item['grande_area']}"), 0, 0, 'L', fill)
-            pdf.cell(col_sub, h_linha, sanitizar_texto(f" {item['subespecialidade']}"), 0, 0, 'L', fill)
-            diag = item.get('diagnostico', 'N/A')
-            pdf.cell(col_diag, h_linha, sanitizar_texto(f" {diag[:40]}..."), 0, 0, 'L', fill)
-            pdf.cell(col_med, h_linha, f"{item['acerto']*100:.1f}%", 0, 0, 'C', fill)
-            
-            # Box do Gap
-            pdf.cell(col_gap, h_linha, "", 0, 0, 'C', fill)
-            gap_val = item['gap']
-            pdf.set_fill_color(*(200, 0, 0) if gap_val < 0 else (0, 150, 0))
-            pdf.rect(x_at + col_area + col_sub + col_diag + col_med + 2.5, y_at + 1.5, w_box, h_box, 'F')
-            pdf.set_xy(x_at + col_area + col_sub + col_diag + col_med, y_at)
-            pdf.set_font('Helvetica', 'B', 8); pdf.set_text_color(255, 255, 255)
-            pdf.cell(col_gap, h_linha, f"{gap_val:+.1f}", 0, 1, 'C')
-            pdf.set_font('Helvetica', '', 7); pdf.set_text_color(60, 60, 60)
+        y_inicial_dados = pdf.get_y()
 
-    print_tabela("Pontos Críticos", dash['analise']['atencao'])
+        for i, item in enumerate(lista[:5]):
+            fill = (i % 2 == 0)
+            y_at, x_at = pdf.get_y(), pdf.get_x()
+            pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
+            
+            bloquear = modo_teaser and i > 0 
+            
+            if bloquear:
+                pdf.cell(col_area + col_sub + col_diag + col_med + col_gap, h_linha, "", 0, 1, 'L', fill)
+                pdf.set_fill_color(220, 220, 220) 
+                pdf.rect(x_at + 2, y_at + 2.5, col_area - 4, 3, 'F')
+                pdf.rect(x_at + col_area + 2, y_at + 2.5, col_sub - 4, 3, 'F')
+                pdf.rect(x_at + col_area + col_sub + 2, y_at + 2.5, col_diag - 10, 3, 'F')
+                pdf.rect(x_at + col_area + col_sub + col_diag + 4, y_at + 2.5, col_med - 8, 3, 'F')
+                pdf.rect(x_at + col_area + col_sub + col_diag + col_med + 2, y_at + 2.5, col_gap - 4, 3, 'F')
+            else:
+                pdf.cell(col_area, h_linha, sanitizar_texto(f" {item['grande_area']}"), 0, 0, 'L', fill)
+                pdf.cell(col_sub, h_linha, sanitizar_texto(f" {item['subespecialidade']}"), 0, 0, 'L', fill)
+                diag = item.get('diagnostico', 'N/A')
+                pdf.cell(col_diag, h_linha, sanitizar_texto(f" {diag[:45]}..."), 0, 0, 'L', fill)
+                pdf.cell(col_med, h_linha, f"{item['acerto']*100:.1f}%", 0, 0, 'C', fill)
+                
+                pdf.cell(col_gap, h_linha, "", 0, 0, 'C', fill)
+                gap_val = item['gap']
+                pdf.set_fill_color(*(200, 0, 0) if gap_val < 0 else (0, 150, 0))
+                
+                box_x = x_at + col_area + col_sub + col_diag + col_med + ((col_gap - w_box)/2)
+                box_y = y_at + ((h_linha - h_box)/2)
+                pdf.rect(box_x, box_y, w_box, h_box, 'F')
+                
+                pdf.set_xy(x_at + col_area + col_sub + col_diag + col_med, y_at)
+                pdf.set_font('Helvetica', 'B', 8); pdf.set_text_color(255, 255, 255)
+                pdf.cell(col_gap, h_linha, f"{gap_val:+.1f}", 0, 1, 'C')
+                pdf.set_font('Helvetica', '', 7); pdf.set_text_color(60, 60, 60)
+
+        # SOBREPOSIÇÃO DO TEASER - CENTRALIZAÇÃO MATEMÁTICA
+        if modo_teaser:
+            largura_box = 120
+            altura_box = 20
+            pos_x_central = (210 - largura_box) / 2
+            y_centro_bloqueio = y_inicial_dados + h_linha + ((4 * h_linha) / 2) - 10
+            
+            pdf.set_fill_color(255, 255, 255); pdf.set_draw_color(253, 94, 17); pdf.set_line_width(0.5)
+            pdf.rect(pos_x_central, y_centro_bloqueio, largura_box, altura_box, 'FD')
+            
+            pdf.set_xy(pos_x_central, y_centro_bloqueio + 4)
+            pdf.set_font('Helvetica', 'B', 9); pdf.set_text_color(30, 58, 95)
+            pdf.cell(largura_box, 5, sanitizar_texto("CONTEÚDO BLOQUEADO NO TEASER"), 0, 1, 'C')
+            
+            pdf.set_x(pos_x_central) 
+            pdf.set_font('Helvetica', 'B', 10); pdf.set_text_color(253, 94, 17)
+            pdf.cell(largura_box, 6, sanitizar_texto("Solicite a versão completa com seu consultor"), 0, 1, 'C')
+
+    pdf.set_font('Helvetica', 'B', 14); pdf.set_text_color(30, 58, 95)
+    pdf.cell(0, 10, sanitizar_texto("3. Pontos Críticos: Temas com maior defasagem"), ln=True); pdf.ln(2)
+    print_tabela("Pontos Críticos", dash['analise']['atencao'], modo_teaser=False)
+
     pdf.ln(10); pdf.set_font('Helvetica', 'B', 14); pdf.set_text_color(30, 58, 95)
-    pdf.cell(0, 10, sanitizar_texto("4. Destaques Institucionais"), ln=True); pdf.ln(2)
-    print_tabela("Fortalezas", dash['analise']['fortalezas'])
+    y_titulo = pdf.get_y()
+    pdf.set_fill_color(0, 150, 0); pdf.rect(15, y_titulo + 2, 2, 6, 'F')
+    pdf.set_x(20)
+    pdf.cell(0, 10, sanitizar_texto("4. Destaques Institucionais (Top 5 Desempenhos)"), ln=True); pdf.ln(2)
+    print_tabela("Fortalezas", dash['analise']['fortalezas'], modo_teaser=True)
 
     pdf_out = pdf.output(dest='S')
-    return StreamingResponse(io.BytesIO(pdf_out), media_type="application/pdf",
-                            headers={"Content-Disposition": f"attachment; filename=Relatorio_P360_{co_curso}.pdf"})
+    return StreamingResponse(
+        io.BytesIO(pdf_out), 
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=Relatorio_Teaser_{co_curso}.pdf"}
+    )
 
 # ==========================================
 # 3. FILTROS E INICIALIZAÇÃO
