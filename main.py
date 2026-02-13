@@ -246,7 +246,7 @@ def dashboard_completo(co_curso: int, session: Session = Depends(get_session)):
     }
 
 # ==========================================
-# 2. RELATÓRIO PDF (INTACTO)
+# 2. RELATÓRIO PDF (CORRIGIDO CÁLCULO DE %)
 # ==========================================
 
 def sanitizar_texto(txt):
@@ -257,25 +257,17 @@ def sanitizar_texto(txt):
 
 class RelatorioP360(FPDF):
     def header(self):
-        # 1. Fundo azul do cabeçalho
         self.set_fill_color(30, 58, 95)
         self.rect(0, 0, 210, 45, 'F')
-        
-        try:
-            self.image('logo_branca.png', x=165, y=10, w=30)
-        except:
-            pass # Se não achar a imagem, o código não trava
-            
+        try: self.image('logo_branca.png', x=165, y=10, w=30)
+        except: pass
         self.set_xy(15, 12)
-        self.set_font('Helvetica', 'B', 18)
-        self.set_text_color(255, 255, 255)
+        self.set_font('Helvetica', 'B', 18); self.set_text_color(255, 255, 255)
         self.cell(0, 8, sanitizar_texto("Diagnóstico Microdados ENAMED 2025"), ln=True)
         if hasattr(self, 'ies_info'):
-            self.set_font('Helvetica', 'B', 11)
-            self.set_text_color(253, 94, 17)
+            self.set_font('Helvetica', 'B', 11); self.set_text_color(253, 94, 17)
             self.cell(0, 7, sanitizar_texto(f"IES: {self.ies_info['nome']}"), ln=True)
-            self.set_font('Helvetica', '', 10)
-            self.set_text_color(220, 220, 220)
+            self.set_font('Helvetica', '', 10); self.set_text_color(220, 220, 220)
             texto_sub = f"{self.ies_info['municipio']} - {self.ies_info['uf']} | Conceito ENAMED: {self.ies_info['conceito']}"
             self.cell(0, 6, sanitizar_texto(texto_sub), ln=True)
 
@@ -285,37 +277,27 @@ class RelatorioP360(FPDF):
         self.set_text_color(150, 150, 150)
         self.cell(0, 10, f"P360 Analytics - Pagina {self.page_no()}", 0, 0, 'C')
 
-@app.get("/ies/{co_curso}/pdf", responses={200: {"content": {"application/pdf": {}}}})
+@app.get("/ies/{co_curso}/pdf")
 def gerar_pdf_visual(co_curso: int, session: Session = Depends(get_session)):
-
     dash = dashboard_completo(co_curso, session)
     bench = obter_benchmark(co_curso, session)
     loc = session.exec(select(Localidade).where(Localidade.co_curso == co_curso)).first()
     uf_atual = loc.sigla_estado if loc else None
     conceito = session.exec(select(Aluno.enamed_ies).where(Aluno.co_curso == co_curso)).first()
-    
     ranking_nac, pos_nac, total_nac = obter_ranking_ies(session, co_curso)
     ranking_reg, pos_reg, total_reg = obter_ranking_ies(session, co_curso, uf=uf_atual)
 
     pdf = RelatorioP360()
-    pdf.ies_info = {
-        'nome': dash['ies'],
-        'uf': uf_atual if uf_atual else "-",
-        'municipio': loc.ies_munic if loc else "-",
-        'conceito': conceito if conceito else "N/A"
-    }
-    
-    pdf.set_margins(15, 15, 15)
+    pdf.ies_info = {'nome': dash['ies'], 'uf': uf_atual or "-", 'municipio': loc.ies_munic if loc else "-", 'conceito': conceito or "N/A"}
     pdf.add_page()
     
-    # --- PÁGINA 1: PERFORMANCE ---
+    # --- PÁGINA 1 ---
     pdf.set_y(55)
     pdf.set_font('Helvetica', 'B', 14); pdf.set_text_color(30, 58, 95)
     pdf.cell(0, 10, sanitizar_texto("1. Performance Comparativa"), new_x="LMARGIN", new_y="NEXT")    
     
     y_topo_cards = pdf.get_y() + 2
     w_card, h_card, gap_card = 58, 28, 3
-
     for i, (label, valor, cor_fundo, cor_texto) in enumerate([
         ("Sua Média Geral", f"{bench['performance']['ies_atual']}%", (245, 245, 245), (30, 58, 95)),
         ("Média Nacional", f"{bench['performance']['media_nacional']}%", (245, 245, 245), (30, 58, 95)),
@@ -333,7 +315,6 @@ def gerar_pdf_visual(co_curso: int, session: Session = Depends(get_session)):
     pdf.set_font('Helvetica', 'I', 8); pdf.set_text_color(120)
     pdf.cell(0, 8, sanitizar_texto(f"Gap: {bench['gaps']['vs_elite']:+.1f} pp em relação à elite."), new_x="LMARGIN", new_y="NEXT")
 
-    # --- RANKING ---
     pdf.ln(5); pdf.set_font('Helvetica', 'B', 14); pdf.set_text_color(30, 58, 95)
     pdf.cell(0, 10, "2. Posicionamento Competitivo", new_x="LMARGIN", new_y="NEXT")
 
@@ -343,7 +324,6 @@ def gerar_pdf_visual(co_curso: int, session: Session = Depends(get_session)):
         indices = [0, 1, 2]; vizinhança = [pos_atual-2, pos_atual-1, pos_atual]
         for v in vizinhança: 
             if v not in indices and 0 <= v < len(r_list): indices.append(v)
-        
         y_bar = pdf.get_y() + 2
         for idx in sorted(list(set(indices))):
             item = r_list[idx]; eh_user = (item['co_curso'] == co_curso)
@@ -358,34 +338,27 @@ def gerar_pdf_visual(co_curso: int, session: Session = Depends(get_session)):
     draw_rank("2.1. Cenário Nacional", ranking_nac, pos_nac, total_nac)
     draw_rank(f"2.2. Cenário Regional ({uf_atual})", ranking_reg, pos_reg, total_reg)
 
-# --- PÁGINA 2: DADOS + ENCERRAMENTO COMERCIAL ---
-    pdf.add_page()
-    pdf.set_y(55) 
-
-    # 1. CONFIGURAÇÃO DE LAYOUT COMPACTO
+    # --- PÁGINA 2 ---
+    pdf.add_page(); pdf.set_y(55) 
     col_area, col_sub, col_diag, col_med, col_gap = 32, 38, 70, 20, 20
     h_linha, w_box, h_box = 7, 16, 5 
 
     def print_tabela_compacta(titulo, lista, modo_teaser=False):
         pdf.set_font('Helvetica', 'B', 12); pdf.set_text_color(30, 58, 95)
         pdf.cell(0, 8, sanitizar_texto(titulo), new_x="LMARGIN", new_y="NEXT")
-        
         pdf.set_fill_color(30, 58, 95); pdf.set_text_color(255, 255, 255); pdf.set_font('Helvetica', 'B', 8)
         pdf.cell(col_area, h_linha, " Área", 0, 0, 'L', True)
         pdf.cell(col_sub, h_linha, " Subespecialidade", 0, 0, 'L', True)
         pdf.cell(col_diag, h_linha, " Diagnóstico", 0, 0, 'L', True)
         pdf.cell(col_med, h_linha, " Média", 0, 0, 'C', True)
         pdf.cell(col_gap, h_linha, " Gap", 0, 1, 'C', True)
-
         pdf.set_font('Helvetica', '', 7); pdf.set_text_color(60, 60, 60)
         y_inicial_dados = pdf.get_y()
 
         for i, item in enumerate(lista[:5]):
             fill = (i % 2 == 0); y_at, x_at = pdf.get_y(), pdf.get_x()
             pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
-            
             bloquear = modo_teaser and i > 0 
-            
             if bloquear:
                 pdf.cell(col_area + col_sub + col_diag + col_med + col_gap, h_linha, "", 0, 1, 'L', fill)
                 pdf.set_fill_color(210, 210, 210) 
@@ -395,16 +368,15 @@ def gerar_pdf_visual(co_curso: int, session: Session = Depends(get_session)):
             else:
                 pdf.cell(col_area, h_linha, sanitizar_texto(f" {item['grande_area']}"), 0, 0, 'L', fill)
                 pdf.cell(col_sub, h_linha, sanitizar_texto(f" {item['subespecialidade']}"), 0, 0, 'L', fill)
-                diag = item.get('diagnostico', 'N/A')
-                pdf.cell(col_diag, h_linha, sanitizar_texto(f" {diag[:45]}..."), 0, 0, 'L', fill)
-                pdf.cell(col_med, h_linha, f"{item['acerto']*100:.1f}%", 0, 0, 'C', fill)
+                diag = item.get('diagnostico', 'N/A'); pdf.cell(col_diag, h_linha, sanitizar_texto(f" {diag[:45]}..."), 0, 0, 'L', fill)
+                
+                # --- CORREÇÃO AQUI: REMOVIDO O *100 QUE CAUSAVA O BUG ---
+                pdf.cell(col_med, h_linha, f"{item['acerto']:.1f}%", 0, 0, 'C', fill)
                 
                 gap_val = item['gap']
                 pdf.set_fill_color(*(200, 0, 0) if gap_val < 0 else (0, 150, 0))
                 bx = x_at + col_area + col_sub + col_diag + col_med + ((col_gap - w_box)/2)
-                by = y_at + ((h_linha - h_box)/2)
-                pdf.rect(bx, by, w_box, h_box, 'F')
-                
+                by = y_at + ((h_linha - h_box)/2); pdf.rect(bx, by, w_box, h_box, 'F')
                 pdf.set_xy(x_at + col_area + col_sub + col_diag + col_med, y_at)
                 pdf.set_font('Helvetica', 'B', 8); pdf.set_text_color(255, 255, 255)
                 pdf.cell(col_gap, h_linha, f"{gap_val:+.1f}", new_x="LMARGIN", new_y="NEXT", align='C')
@@ -414,67 +386,38 @@ def gerar_pdf_visual(co_curso: int, session: Session = Depends(get_session)):
             largura_box, altura_box = 130, 22
             pos_x_central = (210 - largura_box) / 2
             y_box = y_inicial_dados + h_linha + 2 
-            
             pdf.set_fill_color(255, 255, 255); pdf.set_draw_color(253, 94, 17); pdf.set_line_width(0.6)
             pdf.rect(pos_x_central, y_box, largura_box, altura_box, 'FD')
-            
             pdf.set_xy(pos_x_central, y_box + 5)
             pdf.set_font('Helvetica', 'B', 10); pdf.set_text_color(30, 58, 95)
             pdf.cell(largura_box, 6, sanitizar_texto("CONTEÚDO BLOQUEADO NO TEASER"), new_x="LMARGIN", new_y="NEXT", align='C')
-            
             pdf.set_x(pos_x_central)
             pdf.set_font('Helvetica', 'B', 11); pdf.set_text_color(253, 94, 17)
             pdf.cell(largura_box, 7, sanitizar_texto("Solicite a versão completa com seu consultor"), new_x="LMARGIN", new_y="NEXT", align='C')
 
-    # --- EXECUÇÃO DAS TABELAS ---
-    # Tabela 3 - Mantendo o detalhe verde para pontos críticos
-    y_3 = pdf.get_y()
-    pdf.set_x(15)
+    y_3 = pdf.get_y(); pdf.set_x(15)
     print_tabela_compacta("3. Pontos Críticos (Gap vs Nacional)", dash['analise']['atencao'], modo_teaser=False)
-    
-    pdf.ln(4)
-    
-    # Tabela 4 - SIMPLIFICADO: Sem a caixinha verde conforme solicitado
-    pdf.set_x(15) 
+    pdf.ln(4); pdf.set_x(15) 
     print_tabela_compacta("4. Destaques Institucionais (Top 5)", dash['analise']['fortalezas'], modo_teaser=True)
     
-    # --- AJUSTE DE RESPIRAÇÃO: 1cm de respiro ---
-    pdf.set_y(pdf.get_y() + 10) 
-    y_bloco_comercial = pdf.get_y()
-
-    # Linha divisória dinâmica
+    pdf.set_y(pdf.get_y() + 10); y_bloco_comercial = pdf.get_y()
     pdf.set_draw_color(220); pdf.set_line_width(0.3)
-    pdf.line(15, y_bloco_comercial, 195, y_bloco_comercial)
-    pdf.ln(6)
+    pdf.line(15, y_bloco_comercial, 195, y_bloco_comercial); pdf.ln(6)
 
-    # DEFINIÇÃO DOS TÓPICOS
-    topicos = [
-        "Feedback imediato para o estudante",
-        "Raciocínio Clínico estruturado e guiado",
-        "Matriz Curricular alinhada aos casos",
-        "Correção por IA individual"
-    ]
-
+    topicos = ["Feedback imediato para o estudante", "Raciocínio Clínico estruturado e guiado", "Matriz Curricular alinhada aos casos", "Correção por IA individual"]
     y_inicio_conteudo = pdf.get_y()
-    
-    # Coluna da Esquerda
     pdf.set_font('Helvetica', 'B', 14); pdf.set_text_color(30, 58, 95)
     pdf.cell(80, 10, sanitizar_texto("Inteligência para o dia a dia"), new_x="LMARGIN", new_y="NEXT")
-    
     pdf.set_font('Helvetica', '', 9); pdf.set_text_color(60, 60, 60)
     pdf.multi_cell(80, 4.5, sanitizar_texto("Não basta identificar os erros: é preciso corrigi-los na prática. O Paciente 360 conecta aprendizagem, prática e avaliação."))
     pdf.ln(2)
 
     for topico in topicos:
-        # Detalhe laranja/vermelho na frente do tópico
-        pdf.set_fill_color(253, 94, 17)
-        pdf.rect(15, pdf.get_y() + 1.2, 2.5, 2.5, 'F') 
+        pdf.set_fill_color(253, 94, 17); pdf.rect(15, pdf.get_y() + 1.2, 2.5, 2.5, 'F') 
         pdf.set_x(20); pdf.set_font('Helvetica', 'B', 9)
         pdf.cell(70, 5, sanitizar_texto(topico), new_x="LMARGIN", new_y="NEXT")
 
-    # --- COLUNA DA DIREITA: IMAGEM AMPLIADA ---
     img_w, img_x, img_y = 92, 103, y_inicio_conteudo
-
     try:
         pdf.image('cenario_paciente.png', x=img_x, y=img_y, w=img_w)
         pdf.set_xy(img_x + 2, img_y + 53) 
@@ -486,15 +429,9 @@ def gerar_pdf_visual(co_curso: int, session: Session = Depends(get_session)):
     except:
         pdf.set_fill_color(245, 245, 245); pdf.rect(img_x, img_y, img_w, 40, 'F')
 
-    # --- BIG NUMBERS E FECHAMENTO ---
-    pdf.set_y(242) 
-    pdf.set_draw_color(253, 94, 17); pdf.set_line_width(0.5)
-    pdf.line(15, pdf.get_y() - 2, 195, pdf.get_y() - 2)
-    pdf.ln(5)
-
-    y_final_nums = pdf.get_y()
+    pdf.set_y(242); pdf.set_draw_color(253, 94, 17); pdf.set_line_width(0.5)
+    pdf.line(15, pdf.get_y() - 2, 195, pdf.get_y() - 2); pdf.ln(5); y_final_nums = pdf.get_y()
     
-    # Bloco 1 (85%)
     pdf.set_x(15); pdf.set_font('Helvetica', 'B', 32); pdf.set_text_color(30, 58, 95)
     pdf.cell(30, 12, "85%", new_x="RIGHT", new_y="TOP")
     pdf.set_xy(15, y_final_nums + 11); pdf.set_font('Helvetica', 'B', 8); pdf.set_text_color(253, 94, 17)
@@ -502,7 +439,6 @@ def gerar_pdf_visual(co_curso: int, session: Session = Depends(get_session)):
     pdf.set_xy(50, y_final_nums + 1); pdf.set_font('Helvetica', '', 8.5); pdf.set_text_color(60, 60, 60)
     pdf.multi_cell(50, 4, sanitizar_texto("Do ENAMED 2025 exigem raciocínio clínico e não memorização."))
 
-    # Bloco 2 (80%)
     pdf.set_xy(105, y_final_nums)
     pdf.set_font('Helvetica', 'B', 32); pdf.set_text_color(30, 58, 95)
     pdf.cell(30, 12, "80%", new_x="RIGHT", new_y="TOP")
@@ -511,18 +447,11 @@ def gerar_pdf_visual(co_curso: int, session: Session = Depends(get_session)):
     pdf.set_xy(140, y_final_nums + 1); pdf.set_font('Helvetica', '', 8.5); pdf.set_text_color(60, 60, 60)
     pdf.multi_cell(55, 4, sanitizar_texto("Dos casos cobrados no exame já estão prontos na plataforma Paciente 360."))
 
-    # LINHA LARANJA DE FECHAMENTO
-    pdf.ln(12)
-    pdf.set_draw_color(253, 94, 17); pdf.set_line_width(0.5)
+    pdf.ln(12); pdf.set_draw_color(253, 94, 17); pdf.set_line_width(0.5)
     pdf.line(15, pdf.get_y(), 195, pdf.get_y())
     
-    # --- SAÍDA FINAL ---
     pdf_out = pdf.output(dest='S')
-    return StreamingResponse(
-        io.BytesIO(pdf_out), 
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=Teaser_P360_{co_curso}.pdf"}
-    )
+    return StreamingResponse(io.BytesIO(pdf_out), media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=Teaser_P360_{co_curso}.pdf"})
 
 # ==========================================
 # 3. FILTROS E INICIALIZAÇÃO
