@@ -4,3 +4,4 @@ sqlmodel
 fpdf2
 pandas
 python-multipart
+openpyxl
